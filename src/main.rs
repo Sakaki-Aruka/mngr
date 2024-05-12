@@ -44,13 +44,24 @@ struct PluginData {
 
 fn main() {
     let config_path: Option<PathBuf> = get_config_path();
+    if config_path.is_none() {
+        println!("{}", "Failed to get path.".red());
+        return;
+    }
     let app: Option<AppData> =
-        if config_path.is_none() { create_config() }
-        else { get_config(&config_path) };
+        if !config_path.unwrap().exists() {
+            create_config()
+        } else {
+            get_config()
+        };
+
     if app.is_none() {
         println!("{}", "Failed to create 'mngr.toml'. Process closed.".red());
         return;
     }
+
+    //debug
+    dbg!(app);
 }
 
 fn create_config() -> Option<AppData> {
@@ -73,11 +84,12 @@ fn create_config() -> Option<AppData> {
     let app: AppData = AppData::new(Some(id), Some(date), None);
     write!(file, "{}", toml::to_string(&app).unwrap()).unwrap();
     file.flush().unwrap();
+
+    println!("{}", "Task successful. mngr made 'mngr.toml'.".green());
     Some(app)
 }
 
-fn get_config(path: &Option<PathBuf>) -> Option<AppData> {
-    if path.is_none() { return None };
+fn get_config() -> Option<AppData> {
     let element: String = fs::read_to_string("mngr.toml").unwrap();
     let app: core::result::Result<AppData, toml::de::Error> = toml::from_str(element.as_str());
     if app.is_ok() { Some(app.unwrap()) }
