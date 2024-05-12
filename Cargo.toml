@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 toml = "0.8.12"
-uuid = "1.8.0"
+uuid = { version = "1.8.0" , features = ["v4"]}
 chrono = "0.4.38"
 clap = "4.5.4"
 colored = "2.1.0"
+versions = "6.2.0"
+serde = { version = "1.0.201", features = ["derive"] }
