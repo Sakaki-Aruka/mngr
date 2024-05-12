@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
+use std::fmt::format;
 use std::fs::File;
-use std::io::{Result, Write};
+use std::io::{Result, stdin, Write};
+use std::ops::Add;
 use chrono::{DateTime, FixedOffset, ParseResult, Utc};
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+use toml::macros::push_toml;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppData {
@@ -38,8 +41,27 @@ impl AppData {
 struct PluginData {
     name: String,
     version: String,
-    released: String,
+    introduced_date: String,
     description: Option<Vec<String>>,
+}
+
+impl PluginData {
+    pub fn new(name: String, version: String, date: DateTime<Utc>,description: Option<Vec<String>>) -> Self {
+        PluginData {
+            name,
+            version,
+            introduced_date: date.to_string(),
+            description: if description.is_some() { description } else { None },
+        }
+    }
+
+    pub fn content(&self) -> String {
+        let mut content: String = String::new();
+        content.push_str(format!("- name: {}", self.name).as_str());
+        content.push_str(format!("- version: {}", self.version).as_str());
+        content.push_str(format!("- introduced date: {}", self.introduced_date.to_string()).as_str());
+        content
+    }
 }
 
 fn main() {
@@ -60,8 +82,33 @@ fn main() {
         return;
     }
 
+    let app: AppData = app.unwrap();
+
+    loop {
+        let input: String = std::io::read_to_string(stdin()).unwrap();
+        if input == "exit" { break };
+        //
+    }
+
     //debug
+    print_plugins(&app);
     dbg!(app);
+}
+
+fn show_help() {
+    //
+}
+
+fn print_plugins(app: &AppData) {
+    let end: ColoredString = "End of the plugins list.".green();
+    if app.plugins.is_empty() {
+        println!("{}", &end);
+        return;
+    }
+    for plugin in &app.plugins {
+        println!("{}", plugin.1.content());
+    }
+    println!("{}", &end);
 }
 
 fn create_config() -> Option<AppData> {
