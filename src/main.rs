@@ -85,9 +85,17 @@ fn main() {
     let app: AppData = app.unwrap();
 
     loop {
-        let input: String = std::io::read_to_string(stdin()).unwrap();
-        if input == "exit" { break };
-        //
+        let mut input: String = String::new();
+        stdin().read_line(&mut input).ok();
+        input.trim().to_string();
+        let input: &str = input.trim_matches(|c| c == '\r' || c == '\n');
+        match input {
+            "exit" => break,
+            "help" => show_help(),
+            _ => (),
+        }
+
+        println!("> {}", &input);
     }
 
     //debug
@@ -96,7 +104,10 @@ fn main() {
 }
 
 fn show_help() {
-    //
+    println!("'{}' or '{}' - {}", "help".green(), "H".green(), "show this page.");
+    println!("'{}' or '{}' - {}", "register (repository url)".green(), "R (repository url)".green(), "register a specified plugin repository.");
+    println!("'{}' or '{}' - {}", "unregister (plugin name)".green(), "UR (plugin name)".green(), "unregister a specified plugin from mngr.");
+    println!("'{}' or '{}' - {}", "update (plugin_name or 'all')".green(), "U (plugin_name or 'all')".green(), "update a specified or all plugins.");
 }
 
 fn print_plugins(app: &AppData) {
