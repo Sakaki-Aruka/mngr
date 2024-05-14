@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
-use std::fmt::format;
 use std::fs::File;
-use std::io::{Result, stdin, Write};
-use std::ops::Add;
-use chrono::{DateTime, FixedOffset, ParseResult, Utc};
+use std::io::{Result, stdin, stdout, Write};
+use std::str::from_boxed_utf8_unchecked;
+use chrono::{DateTime, FixedOffset, ParseResult, TimeZone, Utc};
 use colored::{ColoredString, Colorize};
+use reqwest::{blocking, Client};
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
-use toml::macros::push_toml;
+use reqwest::blocking::{RequestBuilder, Response};
+use serde_json::Value;
+use toml::value::Datetime;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppData {
@@ -43,6 +45,7 @@ struct PluginData {
     version: String,
     introduced_date: String,
     description: Option<Vec<String>>,
+    pre_release: bool,
 }
 
 impl PluginData {
@@ -52,6 +55,17 @@ impl PluginData {
             version,
             introduced_date: date.to_string(),
             description: if description.is_some() { description } else { None },
+            pre_release: false
+        }
+    }
+
+    pub fn empty_new() -> Self {
+        PluginData {
+            name: String::new(),
+            version: String::new(),
+            introduced_date: String::new(),
+            description: None,
+            pre_release: false,
         }
     }
 
@@ -83,19 +97,22 @@ fn main() {
     }
 
     let app: AppData = app.unwrap();
-
+    print!("mngr > ");
+    stdout().flush().unwrap();
     loop {
         let mut input: String = String::new();
         stdin().read_line(&mut input).ok();
         input.trim().to_string();
         let input: &str = input.trim_matches(|c| c == '\r' || c == '\n');
         match input {
-            "exit" => break,
-            "help" => show_help(),
-            _ => (),
+            "exit" | "E" => break,
+            "help" | "H" => show_help(),
+            _ => {
+                println!("Not found {} command. More help, run 'H'.", &input.yellow());
+            },
         }
-
-        println!("> {}", &input);
+        print!("mngr > ");
+        stdout().flush().unwrap();
     }
 
     //debug
@@ -103,11 +120,126 @@ fn main() {
     dbg!(app);
 }
 
+fn register(app: &AppData, url: &String) -> bool {
+    // https://docs.rs/reqwest/latest/reqwest/
+    // (API URL) https://api.github.com/repos/(UserName)/(RepositoryName)/releases
+    // (NORMAL URL) https://github.com/(UserName)/(RepositoryName) or .git
+    let mut parsed: Vec<String> = Vec::new();
+    url.split("/").for_each(|c| parsed.push(String::from(c)));
+    let repository_name: String =
+        if parsed[5].ends_with(".git") { parsed[5].replace(".git", "") }
+        else { String::from(&parsed[5]) };
+    let url: String = format!("https://api.github.com/repos/{}/{}/releases", parsed[4], repository_name);
+    let body: Response = blocking::get(&url).unwrap();
+    match body.status().as_u16() {
+        200 => {
+            //
+        },
+        _ => {
+            println!("{} Code: {}", "I received a not correct status code.".yellow(), &body.status().as_u16());
+            println!("{}", "Check the destination of the url.".yellow());
+            return false;
+        }
+    }
+    let client: blocking::Client = blocking::Client::new();
+    let mut builder: RequestBuilder = client.get(&url);
+    if !&app.github_token.is_empty() {
+        builder = builder.header("Authorization", format!("token {}", &app.github_token));
+    }
+    let response: reqwest::Result<Response> = builder.send();
+    if response.is_err() {
+        println!("{}", "Failed to send a request or receive a response.".yellow());
+        return false;
+    }
+
+    let response_result: Option<(String, PluginData, String)> = response_parser(response.unwrap());
+    // name, plugin_data, download_url
+    if response_result.is_none() {
+        println!("{}", "Failed to get plugin data.");
+    }
+    let response_result: (String, PluginData, String) = response_result.unwrap();
+    let name: String = response_result.0;
+    let plugin: PluginData = response_result.1;
+    let download_link: String = response_result.2;
+
+    // register to the AppData
+    // displays: rate-limit-remaining
+    false
+}
+
+fn response_parser(response: Response) -> Option<(String, PluginData, String)> {
+    // json parser -> https://docs.rs/serde_json/latest/serde_json/
+    let response_str: reqwest::Result<String> = response.text();
+    if response_str.is_err() {
+        println!("{}", "Failed to receive an API response.".red());
+        return None
+    };
+    // hashmap -> key: plugin name, value: PluginData
+    let response_str: String = response_str.unwrap();
+    let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(response_str.as_str());
+    if parsed.is_err() {
+        println!("{}", "Mapping failed to PluginData from the response data.".red());
+        return None
+    }
+    let parsed: Value = parsed.unwrap();
+    let url_list: Option<&Vec<Value>> = parsed["url"].as_array();
+    if url_list.is_none() {
+        println!("{}", "Failed to parse the response data.".red());
+        return None
+    }
+    let url_list: &Vec<Value> = url_list.unwrap();
+
+    let mut release_date: HashMap<DateTime<Utc>, PluginData> = HashMap::new();
+    let mut download_link: HashMap<DateTime<Utc>, String> = HashMap::new();
+    for v in url_list {
+        let mut plugin: PluginData = PluginData::empty_new();
+        plugin.name = String::from(v["url"].to_string().split("/").collect::<Vec<&str>>()[5]);
+        plugin.version = v["tag_name"].to_string();//String::from(v["tag_name"].as_str().unwrap());
+        plugin.pre_release = v["prerelease"].as_bool().unwrap();
+        let date: &str = v["created_at"].as_str().unwrap();
+        plugin.introduced_date = String::from(date);
+        let date: DateTime<Utc> = DateTime::from(DateTime::parse_from_rfc3339(date).unwrap());
+        release_date.insert(date, plugin);
+        download_link.insert(date, v["assets"].as_array().unwrap()[0]["browser_download_url"].to_string());
+    }
+
+    let latest_date: Option<DateTime<Utc>> = get_latest_date(&release_date);
+    if latest_date.is_none() {
+        println!("{}", "Failed to get latest date.".red());
+        return None
+    };
+    let latest_date: DateTime<Utc> = latest_date.unwrap();
+
+    let plugin: PluginData = release_date.remove(&latest_date).unwrap();
+    let download_link: String = download_link.remove(&latest_date).unwrap();
+    let name: String = String::from(&plugin.name);
+    Some((name, plugin, download_link))
+}
+
+fn get_latest_date(map: &HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>> {
+    let mut result: DateTime<Utc> = DateTime::<Utc>::MIN_UTC;
+    for v in map.keys() {
+        if v.max(&result) == v {
+            result = *v;
+        }
+    }
+    if result == DateTime::<Utc>::MIN_UTC { None } else { Some(result) }
+}
+
+fn print_api_error(cause: Option<String>) {
+    print!("{}", "[API ERROR] Failed to complete a task.".red());
+    if cause.is_some() { print!("Cause: {}", cause.unwrap()); }
+}
+
 fn show_help() {
+    println!("'{}' or '{}' - {}", "exit".green(), "E".green(), "exit from mngr interface.");
     println!("'{}' or '{}' - {}", "help".green(), "H".green(), "show this page.");
+    println!("'{}' or '{}' - {}", "sync".green(), "S".green(), "sync with the plugins directory status.");
     println!("'{}' or '{}' - {}", "register (repository url)".green(), "R (repository url)".green(), "register a specified plugin repository.");
     println!("'{}' or '{}' - {}", "unregister (plugin name)".green(), "UR (plugin name)".green(), "unregister a specified plugin from mngr.");
     println!("'{}' or '{}' - {}", "update (plugin_name or 'all')".green(), "U (plugin_name or 'all')".green(), "update a specified or all plugins.");
+    println!("'{}' or '{}' - {}", "list".green(), "L".green(), "displays all plugins info.");
+    println!("'{}' - {}", "remaining".green(), "displays remaining GitHub API request.");
 }
 
 fn print_plugins(app: &AppData) {
