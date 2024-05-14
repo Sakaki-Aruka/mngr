@@ -7,6 +7,7 @@ use std::str::FromStr;
 use chrono::{DateTime, FixedOffset, ParseResult, Utc};
 use colored::{ColoredString, Colorize};
 use http::{HeaderName, HeaderValue};
+use fancy_regex::Regex;
 use reqwest::{blocking};
 use uuid::Uuid;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -122,19 +123,21 @@ fn main() {
 }
 
 fn register_listener(app: &mut AppData) {
-    print!("mngr > register > ");
-    stdout().flush().unwrap();
-    let mut input: String = String::new();
-    stdin().read_line(&mut input).ok();
-    let input: String = input.trim_end().to_string();
-    let args: Vec<String> = input.split(" ").map(|c| String::from(c)).collect();
-    if args.len() != 1 {
-        println!("{}{}", "Failed to parse arguments. It needs only 1 arg. -> ".red(), "'GitHub repository URL'".yellow());
-        return
-    }
-    if !register(app, &args[0]) {
-        println!("{}", "Failed to register.".red());
-        return
+    loop {
+        print!("mngr > register > ");
+        stdout().flush().unwrap();
+        let mut input: String = String::new();
+        stdin().read_line(&mut input).ok();
+        let input: String = input.trim_end().to_string();
+        let args: Vec<String> = input.split(" ").map(|c| String::from(c)).collect();
+        if args.len() != 1 {
+            println!("{}{}", "Failed to parse arguments. It needs only 1 arg. -> ".red(), "'GitHub repository URL'".yellow());
+        } else if &args[0] == &"exit" {
+            break
+        }
+        if !register(app, &args[0]) {
+            println!("{}", "Failed to register.".red());
+        } else { break }
     }
 }
 
@@ -142,6 +145,12 @@ fn register(app: &mut AppData, url: &String) -> bool {
     // https://docs.rs/reqwest/latest/reqwest/
     // (API URL) https://api.github.com/repos/(UserName)/(RepositoryName)/releases
     // (NORMAL URL) https://github.com/(UserName)/(RepositoryName) or .git
+    let url_pattern: &str = r"^https://github.com/(?=.{0,39}$)(?!.*--)[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?/[\w\.-]+$";
+    let url_pattern: Regex = Regex::new(url_pattern).unwrap();
+     if !url_pattern.is_match(url.as_str()).unwrap() {
+        println!("{}", "Failed to parse the given url.".red());
+        return false
+    }
     let mut parsed: Vec<String> = Vec::new();
     url.split("/").for_each(|c| parsed.push(String::from(c)));
     let author: String = String::from(&parsed[3]);
