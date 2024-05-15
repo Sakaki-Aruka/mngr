@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
+use std::array::from_fn;
 use std::fs::File;
 use std::io::{Result, stdin, stdout, Write};
 use std::str::FromStr;
@@ -75,9 +76,11 @@ impl PluginData {
 
     pub fn content(&self) -> String {
         let mut content: String = String::new();
-        content.push_str(format!("- name: {}", self.name).as_str());
-        content.push_str(format!("- version: {}", self.version).as_str());
-        content.push_str(format!("- introduced date: {}", self.introduced_date.to_string()).as_str());
+        content.push_str(format!("- name: {}\n", self.name).as_str());
+        content.push_str(format!("- version: {}\n", self.version).as_str());
+        content.push_str(format!("- introduced date: {}\n", self.introduced_date.to_string()).as_str());
+        content.push_str(format!("- pre release: {}\n", self.pre_release.to_string()).as_str());
+        content.push_str(format!("- filename: {}", self.file_name.as_str()).as_str());
         content
     }
 }
@@ -111,7 +114,10 @@ fn main() {
             "exit" | "E" | "e" => break,
             "help" | "H" | "h" => show_help(),
             "register" | "R" | "r" => register_listener(&mut app),
-            _ => (),
+            "unregister" | "UR" | "ur" => unregister_listener(&mut app),
+            _ => {
+                println!("{}", "Enter 'help' or 'H', displayed command helps.".underline());
+            },
         }
         print!("mngr > ");
         stdout().flush().unwrap();
@@ -122,7 +128,83 @@ fn main() {
     dbg!(app);
 }
 
+fn unregister_listener(app: &mut AppData) {
+    let help_1: ColoredString = ColoredString::from("Enter 'exit' or 'e', leave unregister mode.").yellow();
+    let help_2: ColoredString = ColoredString::from("Enter 'help' or 'h', display these helps.").yellow();
+    'main:loop {
+        print!("mngr > {}register > ", "un".underline());
+        stdout().flush().unwrap();
+        let mut input: String = String::new();
+        stdin().read_line(&mut input).ok();
+        let input: String = input.trim_end().to_string();
+        let mut args: Vec<String> = input.split(" ").map(|c| String::from(c)).collect();
+        // plugin_name or file_name -> '-n (plugin name)' or '-f (plugin file's name)', and default '(plugin name)' works like '-n (plugin name)'
+        if args.len() < 1 || args.len() > 2 || args[0].is_empty() {
+            println!("{}", "Invalid arguments. It needs only 1 or 2 arguments.".red());
+            println!("{}", "'-n (plugin name)', '-f (plugin file's name)' or '(plugin name)'.".yellow());
+            println!("{}", &help_1);
+            println!("{}", &help_2);
+            continue
+        }
+        if args.len() == 1 {
+            match args[0].as_str() {
+                "exit" | "e" => break 'main,
+                "help" | "h" => {
+                    println!("{}", &help_1);
+                    println!("{}", &help_2);
+                    continue
+                },
+                _ => (),
+            }
+        }
+        if args.len() == 1 { args.insert(0, String::from("-n")) };
+        let removed: Option<String>;
+        if args.get(0).unwrap().as_str() == "-n" {
+            let result: Option<PluginData> = app.plugins.remove(&args[1]);
+            removed = if result.is_some() { Some(result.unwrap().file_name) } else { None };
+        } else if args.get(0).unwrap().as_str() == "-f" {
+            let size: usize = app.plugins.len();
+            app.plugins.retain(|k, v| v.file_name != args[1]);
+            removed = if app.plugins.len() != size { Some(String::from(&args[1])) } else { None };
+        } else {
+            println!("{}", &help_1);
+            println!("{}", &help_2);
+            continue 'main;
+        }
+
+        if removed.is_none() {
+            println!("{}{} {}{}", "Failed to unregister. (".red(), if args[0].as_str() == "-n" { "FileName:" } else { "PluginName:" }, &args[1], ")".red());
+            continue
+        }
+        let plugins_directory: Option<PathBuf> = get_plugins_directory_path();
+        if plugins_directory.is_none() {
+            println!("{}", "Failed to get 'plugins' directory's path.".red());
+            println!("{}", "Change the current directory or make a directory that named 'plugins' here and retry it.".red());
+            continue
+        }
+        let removed: String = removed.unwrap();
+        let plugins_directory: PathBuf = plugins_directory.unwrap();
+        if delete_plugin_jar(&plugins_directory, &removed) {
+            println!("{}", "The plugin has been successfully unregistered.".green());
+            println!("{} {}", "Removed:".green(), &removed);
+        } else { continue }
+    }
+}
+
+fn delete_plugin_jar(directory: &PathBuf, filename: &String) -> bool {
+    let mut file_path: PathBuf = PathBuf::from(directory);
+    file_path.push(filename);
+    if fs::remove_file(file_path.to_str().unwrap()).is_err() {
+        println!("{} -> {}", "Failed to delete the file.".red(), file_path.to_str().unwrap());
+        println!("{}", "* The specified plugin has already unregistered from mngr.".yellow());
+        return false
+    }
+    true
+}
+
 fn register_listener(app: &mut AppData) {
+    let help_1: ColoredString = ColoredString::from("Enter 'exit' or 'e', leave register mode.").yellow();
+    let help_2: ColoredString = ColoredString::from("Enter 'help' or 'h', display these helps.").yellow();
     loop {
         print!("mngr > register > ");
         stdout().flush().unwrap();
@@ -132,12 +214,26 @@ fn register_listener(app: &mut AppData) {
         let args: Vec<String> = input.split(" ").map(|c| String::from(c)).collect();
         if args.len() != 1 {
             println!("{}{}", "Failed to parse arguments. It needs only 1 arg. -> ".red(), "'GitHub repository URL'".yellow());
-        } else if &args[0] == &"exit" {
-            break
+        } else if args.len() == 1 {
+            match args[0].as_str() {
+                "exit" | "e" => {
+                    break
+                },
+                "help" | "h" => {
+                    println!("{}", &help_1);
+                    println!("{}", &help_2);
+                    continue
+                },
+                _ => (),
+            }
+        } else if args.is_empty() {
+            println!("{}", &help_1);
+            println!("{}", &help_2);
+            continue
         }
         if !register(app, &args[0]) {
             println!("{}", "Failed to register.".red());
-        } else { break }
+        }
     }
 }
 
@@ -193,11 +289,22 @@ fn register(app: &mut AppData, url: &String) -> bool {
         return false
     }
     let response: (String, PluginData) = response_result.unwrap();
-    app.plugins.insert(response.0, response.1);
+    let name: String = response.0;
+    let plugin: PluginData = response.1;
+    let plugin_info: String = plugin.content();
+    if app.plugins.contains_key(&name) {
+        println!("{}", "The plugin has already registered.".yellow());
+        let registered: &PluginData = app.plugins.get(&name).unwrap();
+        println!("{}", registered.content());
+        return false
+    }
+    app.plugins.insert(name, plugin);
 
     let api_remaining: String =
         if api_remaining.is_some() { api_remaining.unwrap().to_string() }
         else { String::from("UNKNOWN") };
+    println!("{}", "The plugin has been successfully registered.".green());
+    println!("{}", plugin_info);
     println!("API CALL REMAINING: {}", api_remaining);
     true
 
@@ -228,9 +335,12 @@ fn register(app: &mut AppData, url: &String) -> bool {
 }
 
 fn get_plugins_directory_path() -> Option<PathBuf> {
-    //
-
-    None
+    let mut current: PathBuf = match env::current_dir() {
+        Ok(path) => path,
+        _ => return None,
+    };
+    current.push("plugins");
+    return Some(current)
 }
 
 fn jar_download(url: &String, directory: &PathBuf, file_name: &String) -> bool {
@@ -309,42 +419,7 @@ fn response_parser(response: Response) -> Option<(String, PluginData)> {
     }
     let latest_date: DateTime<Utc> = latest_date.unwrap();
     let plugin: PluginData = unsorted_data.remove(&latest_date).unwrap();
-
-    //debug
-    dbg!(&plugin);
     Some((String::from(&plugin.name), plugin))
-
-    // if url_list.is_none() {
-    //     println!("{}", "Failed to parse the response data.".red());
-    //     return None
-    // }
-    // let url_list: &Vec<Value> = url_list.unwrap();
-    //
-    // let mut release_date: HashMap<DateTime<Utc>, PluginData> = HashMap::new();
-    // let mut download_link: HashMap<DateTime<Utc>, String> = HashMap::new();
-    // for v in url_list {
-    //     let mut plugin: PluginData = PluginData::empty_new();
-    //     plugin.name = String::from(v["url"].to_string().split("/").collect::<Vec<&str>>()[5]);
-    //     plugin.version = v["tag_name"].to_string();//String::from(v["tag_name"].as_str().unwrap());
-    //     plugin.pre_release = v["prerelease"].as_bool().unwrap();
-    //     let date: &str = v["created_at"].as_str().unwrap();
-    //     plugin.introduced_date = String::from(date);
-    //     let date: DateTime<Utc> = DateTime::from(DateTime::parse_from_rfc3339(date).unwrap());
-    //     release_date.insert(date, plugin);
-    //     download_link.insert(date, v["assets"].as_array().unwrap()[0]["browser_download_url"].to_string());
-    // }
-
-    // let latest_date: Option<DateTime<Utc>> = get_latest_date(&release_date);
-    // if latest_date.is_none() {
-    //     println!("{}", "Failed to get latest date.".red());
-    //     return None
-    // };
-    // let latest_date: DateTime<Utc> = latest_date.unwrap();
-    //
-    // let plugin: PluginData = release_date.remove(&latest_date).unwrap();
-    // let download_link: String = download_link.remove(&latest_date).unwrap();
-    // let name: String = String::from(&plugin.name);
-    // Some((name, plugin, download_link))
 }
 
 fn get_latest_date(map: &HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>> {
