@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
-use std::array::from_fn;
 use std::fs::File;
 use std::io::{Result, stdin, stdout, Write};
 use std::str::FromStr;
@@ -49,10 +48,11 @@ struct PluginData {
     description: Option<Vec<String>>,
     pre_release: bool,
     file_name: String,
+    repository_url: String,
 }
 
 impl PluginData {
-    pub fn new(name: String, version: String, date: DateTime<Utc>,description: Option<Vec<String>>, pre_release: bool, file_name: String) -> Self {
+    pub fn new(name: String, version: String, date: DateTime<Utc>,description: Option<Vec<String>>, pre_release: bool, file_name: String, repository_url: String) -> Self {
         PluginData {
             name,
             version,
@@ -60,6 +60,7 @@ impl PluginData {
             description: if description.is_some() { description } else { None },
             pre_release,
             file_name,
+            repository_url,
         }
     }
 
@@ -71,6 +72,7 @@ impl PluginData {
             description: None,
             pre_release: false,
             file_name: String::new(),
+            repository_url: String::new(),
         }
     }
 
@@ -81,6 +83,7 @@ impl PluginData {
         content.push_str(format!("- introduced date: {}\n", self.introduced_date.to_string()).as_str());
         content.push_str(format!("- pre release: {}\n", self.pre_release.to_string()).as_str());
         content.push_str(format!("- filename: {}", self.file_name.as_str()).as_str());
+        content.push_str(format!("- repository url: {}", self.repository_url.as_str()).as_str());
         content
     }
 }
@@ -115,6 +118,7 @@ fn main() {
             "help" | "H" | "h" => show_help(),
             "register" | "R" | "r" => register_listener(&mut app),
             "unregister" | "UR" | "ur" => unregister_listener(&mut app),
+            "list" | "L" | "l" => print_plugins(&app),
             _ => {
                 println!("{}", "Enter 'help' or 'H', displayed command helps.".underline());
             },
@@ -219,7 +223,12 @@ fn register_listener(app: &mut AppData) {
                 "exit" | "e" => {
                     break
                 },
-                "help" | "h" => {
+                "help" | "h" | "" => {
+                    if args[0].as_str() == "" {
+                        // when empty
+                        println!("{}", "Invalid arguments. It needs only one argument.".red());
+                        println!("{}", "-> '(repository url)' (e.g. 'https://github.com/Sakaki-Aruka/custom-crafter')".yellow());
+                    }
                     println!("{}", &help_1);
                     println!("{}", &help_2);
                     continue
@@ -397,6 +406,7 @@ fn response_parser(response: Response) -> Option<(String, PluginData)> {
             let name: String = String::from(some_base.get(4).unwrap().as_str());
             let version: String = String::from(some_base.get(7).unwrap().as_str());
             let pre_release: bool = j["prerelease"].as_bool().unwrap();
+            let repository_url: String = j["html_url"].to_string();
             let mut file_name: String = String::new();
             let mut created_date: String = String::new();
             for k in j["assets"].as_array() {
@@ -406,7 +416,7 @@ fn response_parser(response: Response) -> Option<(String, PluginData)> {
             let description: Option<Vec<String>> = if j["body"].as_str().is_some() { Some(vec![String::from(j["body"].as_str().unwrap())]) } else { None };
             let date: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_date).unwrap().to_utc();
             let key: DateTime<Utc> = date;
-            let plugin: PluginData = PluginData::new(name, version, date, description, pre_release, file_name);
+            let plugin: PluginData = PluginData::new(name, version, date, description, pre_release, file_name, repository_url);
 
             unsorted_data.insert(key, plugin);
         }
@@ -443,7 +453,7 @@ fn show_help() {
     println!("'{}' or '{}' - {}", "help".green(), "H".green(), "show this page.");
     println!("'{}' or '{}' - {}", "sync".green(), "S".green(), "sync with the plugins directory status.");
     println!("'{}' or '{}' - {}", "register".green(), "R".green(), "Enter 'register' mode.");
-    println!("'{}' or '{}' - {}", "unregister (plugin name)".green(), "UR (plugin name)".green(), "unregister a specified plugin from mngr.");
+    println!("'{}' or '{}' - {}", "unregister".green(), "UR".green(), "Enter 'unregister' mode.");
     println!("'{}' or '{}' - {}", "update (plugin_name or 'all')".green(), "U (plugin_name or 'all')".green(), "update a specified or all plugins.");
     println!("'{}' or '{}' - {}", "list".green(), "L".green(), "displays all plugins info.");
     println!("'{}' - {}", "remaining".green(), "displays remaining GitHub API request.");
