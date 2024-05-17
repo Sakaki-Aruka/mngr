@@ -130,10 +130,6 @@ fn main() {
         print!("mngr > ");
         stdout().flush().unwrap();
     }
-
-    //debug
-    print_plugins(&app);
-    dbg!(app);
 }
 
 fn unregister_listener(app: &mut AppData) {
@@ -417,11 +413,6 @@ fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
     // https://github.com/Sakaki-Aruka/custom-crafter/releases/download/v4.1.6/custom-crafter-4.1.6.jar
     // -> (repository-url)/releases/download/(version)/(file name)
     let download_url: String = String::from(format!("{}/releases/download/{}/{}", &plugin.repository_url.as_str(), &plugin.version, &plugin.file_name)); // fix here
-
-    dbg!(&plugin.repository_url);
-    dbg!(&plugin.version);
-    dbg!(&plugin.file_name);
-
     let mut builder: RequestBuilder = blocking::Client::new().get(&download_url);
     builder = builder.header("User-Agent", "mngr");
     let response: reqwest::Result<Response> = builder.send();
@@ -436,6 +427,7 @@ fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
     path.push(filename);
     if path.exists() {
         println!("{}", "The file has already exists. What do you want to do to it?".yellow());
+        println!("Target file: {}", &plugin.file_name.underline());
         println!(" {}, or {}", "Delete and Update (Enter '0')".green(), "Not change (Enter other than '0')".yellow());
         print!("mngr > update > select > ");
         stdout().flush().unwrap();
@@ -513,6 +505,7 @@ fn response_parser (response: Response, sorter: Option<fn(&HashMap<DateTime<Utc>
             let repository_url: String = format!("https://github.com/{}/{}", &repository_url_base[3], &repository_url_base[4]);
             let mut file_name: String = String::new();
             let mut created_date: String = String::new();
+            if j["assets"].as_array().unwrap().is_empty() { continue };
             for k in j["assets"].as_array() {
                 file_name.push_str(k[0]["name"].as_str().unwrap());
                 created_date.push_str(k[0]["created_at"].as_str().unwrap());
