@@ -3,7 +3,7 @@ use std::path::{PathBuf};
 use std::{env, fs};
 use std::fs::File;
 use std::io::{Result, stdin, stdout, Write};
-use std::str::FromStr;
+use std::str::{Bytes, FromStr};
 use chrono::{DateTime, FixedOffset, ParseResult, Utc};
 use colored::{ColoredString, Colorize};
 use http::{HeaderName, HeaderValue};
@@ -393,9 +393,6 @@ fn all_update(app: &mut AppData) {
         new.insert(parsed.0, parsed.1);
     }
 
-    dbg!(&app.plugins);
-    dbg!(&new);
-
     for remove in new {
         let new_version: String = String::from(&remove.1.version);
         let removed: PluginData = app.plugins.remove(&remove.0).unwrap();
@@ -429,21 +426,11 @@ fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
     builder = builder.header("User-Agent", "mngr");
     let response: reqwest::Result<Response> = builder.send();
     if response.is_err() {
-
-        dbg!(&response);
-        dbg!(&download_url);
-
         println!("{} From: {}", "Failed to download a release file.".red(), &download_url.underline());
         return false
     }
     let response: Response = response.unwrap();
-    let body: reqwest::Result<String> = response.text();
-    if body.is_err() {
-        println!("{}", "Failed to get request body.".red());
-        return false
-    }
-    let body: String = body.unwrap();
-    let content: &[u8] = body.as_bytes();
+
     let filename: String = String::from(&plugin.file_name);
     let mut path: PathBuf = PathBuf::from(directory);
     path.push(filename);
@@ -472,6 +459,7 @@ fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
             }
         }
     }
+    let content = response.bytes().unwrap();
     if fs::write(&path.as_path(), content).is_err() {
         println!("{}", "Failed to save the downloaded content.".red());
         false
