@@ -49,10 +49,11 @@ struct PluginData {
     pre_release: bool,
     file_name: String,
     repository_url: String,
+    latest_in_the_time: bool
 }
 
 impl PluginData {
-    pub fn new(name: String, version: String, date: DateTime<Utc>,description: Option<Vec<String>>, pre_release: bool, file_name: String, repository_url: String) -> Self {
+    pub fn new(name: String, version: String, date: DateTime<Utc>,description: Option<Vec<String>>, pre_release: bool, file_name: String, repository_url: String, is_latest: bool) -> Self {
         PluginData {
             name,
             version,
@@ -61,6 +62,7 @@ impl PluginData {
             pre_release,
             file_name,
             repository_url,
+            latest_in_the_time: is_latest,
         }
     }
 
@@ -73,6 +75,7 @@ impl PluginData {
             pre_release: false,
             file_name: String::new(),
             repository_url: String::new(),
+            latest_in_the_time: true,
         }
     }
 
@@ -119,6 +122,7 @@ fn main() {
             "register" | "R" | "r" => register_listener(&mut app),
             "unregister" | "UR" | "ur" => unregister_listener(&mut app),
             "list" | "L" | "l" => print_plugins(&app),
+            "update" | "U" | "u" => update(&mut app),
             _ => {
                 println!("{}", "Enter 'help' or 'H', displayed command helps.".underline());
             },
@@ -233,6 +237,7 @@ fn register_listener(app: &mut AppData) {
                     println!("{}", &help_2);
                     continue
                 },
+                // 1:https://github.com/Sakaki-Aruka/custom-crafter -> latest -1 version register and unregister same name plugin. (when exist)
                 _ => (),
             }
         } else if args.is_empty() {
@@ -291,7 +296,7 @@ fn register(app: &mut AppData, url: &String) -> bool {
         }
     }
     let api_remaining: Option<i16> = get_rate_limit_remaining(&response);
-    let response_result: Option<(String, PluginData)> = response_parser(response);
+    let response_result: Option<(String, PluginData)> = response_parser(response, None);
     // name, plugin_data
     if response_result.is_none() {
         println!("{}", "Failed to get plugin data.");
@@ -316,31 +321,6 @@ fn register(app: &mut AppData, url: &String) -> bool {
     println!("{}", plugin_info);
     println!("API CALL REMAINING: {}", api_remaining);
     true
-
-    // let api_remaining: String =
-    //     if api_remaining.is_some() { api_remaining.unwrap().to_string() }
-    //     else { String::from("UNKNOWN") };
-    // println!("API CALL REMAINING: {}", api_remaining);
-    //
-    // let response_result: (String, PluginData, String) = response_result.unwrap();
-    // let name: String = response_result.0;
-    // let plugin: PluginData = response_result.1;
-    // let download_link: String = response_result.2;
-    // let file_name: String = download_link.split("/").last().unwrap().to_string();
-    // let plugins_directory: Option<PathBuf> = get_plugins_directory_path();
-    // if plugins_directory.is_none() {
-    //     println!("{}", "Failed to get 'plugins' directory's path. Check and retry.".red());
-    //     return false
-    // }
-    // let plugins_directory: PathBuf = plugins_directory.unwrap();
-    // if !jar_download(&download_link, &plugins_directory, &file_name) {
-    //     println!("{} {}", "Failed to download".red(), &file_name.underline());
-    //     return false
-    // }
-    // // set the filename to the plugin_data
-    // // register to the AppData
-    // // displays: rate-limit-remaining
-    // false
 }
 
 fn get_plugins_directory_path() -> Option<PathBuf> {
@@ -352,20 +332,154 @@ fn get_plugins_directory_path() -> Option<PathBuf> {
     return Some(current)
 }
 
-fn jar_download(url: &String, directory: &PathBuf, file_name: &String) -> bool {
-    let mut builder: RequestBuilder = blocking::Client::new().get(url);
-    builder = builder.header("Content-Disposition", format!("attachment; filename={}", file_name));
-    // Content-Type: application/octet-stream
-    builder = builder.header("Content-Type", "application/octet-stream");
+fn update(app: &mut AppData) {
+    // input types
+    // #all -> all update to latest version
+    // #only-marked -> updates what is marked 'latest'
+    // #!only-marked -> updates what is not marked 'latest'
+    // #pls (plugin_name,plugin_name,plugin_name -> updates what is specified
+    // #~(RFC3339 formatted date) -> updates what is published before specified date
+    // #(RFC3339 formatted date)~ -> updates what is published after specified date
+    // #plv -> Enter select plugin and version mode.
+    //
+    loop {
+        print!("mngr > update > ");
+        stdout().flush().unwrap();
+        let mut input: String = String::new();
+        stdin().read_line(&mut input).ok();
+        let input: String = input.trim_end().to_string();
+        match input.as_str() {
+            "exit" | "E" | "e" => break,
+            "#all" => {
+                all_update(app);
+            },
+            _ => (),
+        }
+    }
+}
+
+
+fn all_update(app: &mut AppData) {
+    let mut new: HashMap<String, PluginData> = HashMap::new();
+    for plugin in &app.plugins {
+        // repository url (e.g.)-> https://github.com/Sakaki-Aruka/custom-crafter
+        let name: String = String::from(plugin.0);
+        let parsed_repository_url: Vec<String> = String::from(&plugin.1.repository_url).split("/").map(|c| String::from(c)).collect();
+        // 0 -> https:, 1 -> '', 2 -> github.com, 3 -> Sakaki-Aruka, 4 -> custom-crafter
+        let url: String = String::from(format!("https://api.github.com/repos/{}/{}/releases", &parsed_repository_url[3], &parsed_repository_url[4]));
+        let mut builder: RequestBuilder = blocking::Client::new().get(&url);
+        if !&app.github_token.is_empty() {
+            builder = builder.header("Authorization", format!("token {}", &app.github_token));
+        }
+        builder = builder.header("X-GitHub-Api-Version", "2022-11-28");
+        builder = builder.header("User-Agent", "mngr");
+        builder = builder.header("Accept", "application/vnd.github.v3+json");
+        builder = builder.header("Content-Type", "application/json");
+        let response: reqwest::Result<Response> = builder.send();
+        if response.is_err() {
+            println!("{}", "Failed to get plugin data from GitHub API.".red());
+            continue
+        }
+        let response: Response = response.unwrap();
+        let func: fn(&HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>> = |map: &HashMap<DateTime<Utc>, PluginData>| {
+            map.keys().cloned().max()
+        };
+        let parsed: Option<(String, PluginData)> = response_parser(response, Some(func));
+        if parsed.is_none() {
+            println!("{} ({})", "Failed to parse the response data from GitHub API.".red(), &plugin.0.yellow().underline());
+            continue
+        }
+        let parsed: (String, PluginData) = parsed.unwrap();
+        new.insert(parsed.0, parsed.1);
+    }
+
+    dbg!(&app.plugins);
+    dbg!(&new);
+
+    for remove in new {
+        let new_version: String = String::from(&remove.1.version);
+        let removed: PluginData = app.plugins.remove(&remove.0).unwrap();
+        app.plugins.insert(remove.0, remove.1);
+        println!("Old version: {} -> New version: {}", &removed.version.underline(), &new_version.underline());
+    }
+
+    for plugin in &app.plugins {
+        let plugins_path: Option<PathBuf> = get_plugins_directory_path();
+        if plugins_path.is_none() { continue };
+        let plugins_path: PathBuf = plugins_path.unwrap();
+        jar_download(plugin.1, &plugins_path);
+    }
+}
+
+fn plugin_version_update_mode(app: &AppData) {
+    //
+}
+
+fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
+    // https://github.com/Sakaki-Aruka/custom-crafter/releases/tag/v4.1.6
+    // https://github.com/Sakaki-Aruka/custom-crafter/releases/download/v4.1.6/custom-crafter-4.1.6.jar
+    // -> (repository-url)/releases/download/(version)/(file name)
+    let download_url: String = String::from(format!("{}/releases/download/{}/{}", &plugin.repository_url.as_str(), &plugin.version, &plugin.file_name)); // fix here
+
+    dbg!(&plugin.repository_url);
+    dbg!(&plugin.version);
+    dbg!(&plugin.file_name);
+
+    let mut builder: RequestBuilder = blocking::Client::new().get(&download_url);
+    builder = builder.header("User-Agent", "mngr");
     let response: reqwest::Result<Response> = builder.send();
     if response.is_err() {
-        println!("{}", "Failed to receive API response.".red());
+
+        dbg!(&response);
+        dbg!(&download_url);
+
+        println!("{} From: {}", "Failed to download a release file.".red(), &download_url.underline());
         return false
     }
-    let mut directory: PathBuf = PathBuf::from(directory);
-    directory.push(PathBuf::from(file_name));
-    //
-    false
+    let response: Response = response.unwrap();
+    let body: reqwest::Result<String> = response.text();
+    if body.is_err() {
+        println!("{}", "Failed to get request body.".red());
+        return false
+    }
+    let body: String = body.unwrap();
+    let content: &[u8] = body.as_bytes();
+    let filename: String = String::from(&plugin.file_name);
+    let mut path: PathBuf = PathBuf::from(directory);
+    path.push(filename);
+    if path.exists() {
+        println!("{}", "The file has already exists. What do you want to do to it?".yellow());
+        println!(" {}, or {}", "Delete and Update (Enter '0')".green(), "Not change (Enter other than '0')".yellow());
+        print!("mngr > update > select > ");
+        stdout().flush().unwrap();
+        let mut select: String = String::new();
+        stdin().read_line(&mut select).ok();
+        let select: String = select.trim_end().to_string();
+        match select.as_str() {
+            "0" => {
+                if fs::remove_file(&path.as_path()).is_err() {
+                    println!("{}", "Failed to remove the file.".red());
+                    return false
+                }
+                if fs::File::create(&path.as_path()).is_err() {
+                    println!("{}", "Failed to create the file.".red());
+                    return false
+                }
+            },
+            _ => {
+                println!("{} {}.", "Cancel to install".yellow(), &plugin.file_name.yellow());
+                return false
+            }
+        }
+    }
+    if fs::write(&path.as_path(), content).is_err() {
+        println!("{}", "Failed to save the downloaded content.".red());
+        false
+    } else {
+        println!("{}", "The plugin has been successfully download.".green());
+        println!("{} '{}'", "Saved as", &path.to_str().unwrap());
+        true
+    }
 }
 
 fn get_rate_limit_remaining(response: &Response) -> Option<i16> {
@@ -381,7 +495,8 @@ fn get_rate_limit_remaining(response: &Response) -> Option<i16> {
     }
 }
 
-fn response_parser(response: Response) -> Option<(String, PluginData)> {
+
+fn response_parser (response: Response, sorter: Option<fn(&HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>>>) -> Option<(String, PluginData)> {
     // json parser -> https://docs.rs/serde_json/latest/serde_json/
     let response_str: reqwest::Result<String> = response.text();
     if response_str.is_err() {
@@ -406,7 +521,8 @@ fn response_parser(response: Response) -> Option<(String, PluginData)> {
             let name: String = String::from(some_base.get(4).unwrap().as_str());
             let version: String = String::from(some_base.get(7).unwrap().as_str());
             let pre_release: bool = j["prerelease"].as_bool().unwrap();
-            let repository_url: String = j["html_url"].to_string();
+            let repository_url_base: Vec<String> = j["html_url"].to_string().split("/").map(|c| String::from(c)).collect();
+            let repository_url: String = format!("https://github.com/{}/{}", &repository_url_base[3], &repository_url_base[4]);
             let mut file_name: String = String::new();
             let mut created_date: String = String::new();
             for k in j["assets"].as_array() {
@@ -416,13 +532,18 @@ fn response_parser(response: Response) -> Option<(String, PluginData)> {
             let description: Option<Vec<String>> = if j["body"].as_str().is_some() { Some(vec![String::from(j["body"].as_str().unwrap())]) } else { None };
             let date: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_date).unwrap().to_utc();
             let key: DateTime<Utc> = date;
-            let plugin: PluginData = PluginData::new(name, version, date, description, pre_release, file_name, repository_url);
+            let plugin: PluginData = PluginData::new(name, version, date, description, pre_release, file_name, repository_url, true);
 
             unsorted_data.insert(key, plugin);
         }
     }
 
-    let latest_date: Option<DateTime<Utc>> = get_latest_date(&unsorted_data);
+    let latest_date: Option<DateTime<Utc>> = if sorter.is_none() {
+        get_latest_date(&unsorted_data)
+    } else {
+        let func = sorter.unwrap();
+        func(&unsorted_data)
+    };
     if latest_date.is_none() {
         println!("{}", "Failed to search latest release.".red());
         return None
