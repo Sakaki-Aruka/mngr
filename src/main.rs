@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
-use std::fs::File;
+use std::fs::{File};
 use std::io::{Result, stdin, stdout, Write};
 use std::str::{Bytes, FromStr};
 use chrono::{DateTime, FixedOffset, ParseResult, Utc};
@@ -130,6 +130,27 @@ fn main() {
         print!("mngr > ");
         stdout().flush().unwrap();
     }
+    config_update(&app);
+}
+
+fn config_update(app: &AppData) {
+    let path: Option<PathBuf> = get_config_path();
+    if path.is_none() {
+        println!("{}", "Failed to get 'mngr.toml' path.".red());
+        println!("{}", "mngr will not save the data.".yellow());
+        return;
+    }
+    let path: PathBuf = path.unwrap();
+    let mut file: Result<File> = File::create(path.as_path());
+    if file.is_err() {
+        println!("{}", "Failed to handle 'mngr.toml'.".red());
+        println!("{}", "mngr will not save the modified data.".yellow());
+        return;
+    }
+    let mut file: File = file.unwrap();
+    let content: String = toml::to_string(app).unwrap();
+    write!(file, "{}", content).unwrap();
+    file.flush().unwrap();
 }
 
 fn unregister_listener(app: &mut AppData) {
