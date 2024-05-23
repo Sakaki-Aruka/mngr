@@ -81,12 +81,14 @@ impl PluginData {
 
     pub fn content(&self) -> String {
         let mut content: String = String::new();
+        content.push('\n');
         content.push_str(format!("- name: {}\n", self.name).as_str());
         content.push_str(format!("- version: {}\n", self.version).as_str());
         content.push_str(format!("- introduced date: {}\n", self.introduced_date.to_string()).as_str());
         content.push_str(format!("- pre release: {}\n", self.pre_release.to_string()).as_str());
-        content.push_str(format!("- filename: {}", self.file_name.as_str()).as_str());
+        content.push_str(format!("- filename: {}\n", self.file_name.as_str()).as_str());
         content.push_str(format!("- repository url: {}", self.repository_url.as_str()).as_str());
+        content.push('\n');
         content
     }
 }
@@ -531,7 +533,7 @@ fn response_parser (response: Response, sorter: Option<fn(&HashMap<DateTime<Utc>
                 file_name.push_str(k[0]["name"].as_str().unwrap());
                 created_date.push_str(k[0]["created_at"].as_str().unwrap());
             }
-            let description: Option<Vec<String>> = if j["body"].as_str().is_some() { Some(vec![String::from(j["body"].as_str().unwrap())]) } else { None };
+            let description: Option<Vec<String>> = if j["body"].as_str().is_some() { Some(vec![String::from(j["body"].as_str().unwrap().replace("\r\n", "\n"))]) } else { None };
             let date: DateTime<Utc> = DateTime::parse_from_rfc3339(&created_date).unwrap().to_utc();
             let key: DateTime<Utc> = date;
             let plugin: PluginData = PluginData::new(name, version, date, description, pre_release, file_name, repository_url, true);
