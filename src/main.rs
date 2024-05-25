@@ -394,7 +394,12 @@ fn update_listener(app: &mut AppData) {
             },
             "#multi" => {
                 multiple_plugins_update_listener(app);
-            }
+            },
+            "" => {
+                println!("'{}' = {}", "#all".green(), "To update all plugins that are registered.");
+                println!("'{}' = {}", "#!pre".green(), "To update that are not marked 'pre-release'.");
+                println!("'{}' = {}", "#multi".green(), "To update that are specified plugins.");
+            },
             _ => (),
         }
     }
