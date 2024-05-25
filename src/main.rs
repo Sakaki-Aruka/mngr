@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
+use std::arch::x86_64::_mm_add_pd;
 use std::fs::{File};
 use std::io::{Result, stdin, stdout, Write};
+use std::ops::DerefMut;
 use std::str::{Bytes, FromStr};
-use chrono::{DateTime, FixedOffset, ParseResult, Utc};
+use chrono::{DateTime, FixedOffset, ParseResult, TimeDelta, Utc};
 use colored::{ColoredString, Colorize};
 use http::{HeaderName, HeaderValue};
 use fancy_regex::Regex;
@@ -119,12 +121,13 @@ fn main() {
         stdin().read_line(&mut input).ok();
         let input: &str = input.trim_end();
         match input {
+            // write here (have to displays the result of a process. 'succeeded' or 'failed'.)
             "exit" | "E" | "e" => break,
             "help" | "H" | "h" => show_help(),
             "register" | "R" | "r" => register_listener(&mut app),
             "unregister" | "UR" | "ur" => unregister_listener(&mut app),
             "list" | "L" | "l" => print_plugins(&app),
-            "update" | "U" | "u" => update(&mut app),
+            "update" | "U" | "u" => update_listener(&mut app),
             _ => {
                 println!("{}", "Enter 'help' or 'H', displayed command helps.".underline());
             },
@@ -203,27 +206,28 @@ fn unregister_listener(app: &mut AppData) {
             println!("{}{} {}{}", "Failed to unregister. (".red(), if args[0].as_str() == "-n" { "FileName:" } else { "PluginName:" }, &args[1], ")".red());
             continue
         }
-        let plugins_directory: Option<PathBuf> = get_plugins_directory_path();
-        if plugins_directory.is_none() {
-            println!("{}", "Failed to get 'plugins' directory's path.".red());
-            println!("{}", "Change the current directory or make a directory that named 'plugins' here and retry it.".red());
-            continue
-        }
         let removed: String = removed.unwrap();
-        let plugins_directory: PathBuf = plugins_directory.unwrap();
-        if delete_plugin_jar(&plugins_directory, &removed) {
+
+        if delete_plugin_jar(&removed, true) {
             println!("{}", "The plugin has been successfully unregistered.".green());
             println!("{} {}", "Removed:".green(), &removed);
         } else { continue }
     }
 }
 
-fn delete_plugin_jar(directory: &PathBuf, filename: &String) -> bool {
+fn delete_plugin_jar(filename: &String, is_unregister: bool) -> bool {
+    let plugins_directory: Option<PathBuf> = get_plugins_directory_path();
+    if plugins_directory.is_none() {
+        println!("{}", "Failed to get 'plugins' directory's path.".red());
+        println!("{}", "Change the current directory or make a directory that named 'plugins' here and retry it.".red());
+        return false
+    }
+    let directory: PathBuf = plugins_directory.unwrap();
     let mut file_path: PathBuf = PathBuf::from(directory);
     file_path.push(filename);
     if fs::remove_file(file_path.to_str().unwrap()).is_err() {
         println!("{} -> {}", "Failed to delete the file.".red(), file_path.to_str().unwrap());
-        println!("{}", "* The specified plugin has already unregistered from mngr.".yellow());
+        if is_unregister { println!("{}", "* The specified plugin has already unregistered from mngr.".yellow()); };
         return false
     }
     true
@@ -311,19 +315,22 @@ fn register(app: &mut AppData, url: &String) -> bool {
         _ => {
             println!("{} Code: {}", "I received a not correct status code.".yellow(), &response.status().as_u16());
             println!("{}", "Check the destination of the url.".yellow());
+            if &response.status().as_u16() == &401 {
+                println!("{}{}", "\n", "Detected 401 error.".yellow());
+                println!("{}", "This error means that you sent an incorrect authorization token with the request.".yellow().underline());
+                println!("{}", "You have to check your github api token what written in 'mngr.toml' and those expiration.".yellow().underline());
+            }
             return false;
         }
     }
     let api_remaining: Option<i16> = get_rate_limit_remaining(&response);
-    let response_result: Option<(String, PluginData)> = response_parser(response, None);
-    // name, plugin_data
+    let response_result: Option<PluginData> = get_latest_plugin(&mut response_parser(response));
     if response_result.is_none() {
         println!("{}", "Failed to get plugin data.");
         return false
     }
-    let response: (String, PluginData) = response_result.unwrap();
-    let name: String = response.0;
-    let plugin: PluginData = response.1;
+    let plugin: PluginData = response_result.unwrap();
+    let name: String = String::from(&plugin.name);
     let plugin_info: String = plugin.content();
     if app.plugins.contains_key(&name) {
         println!("{}", "The plugin has already registered.".yellow());
@@ -351,12 +358,14 @@ fn get_plugins_directory_path() -> Option<PathBuf> {
     return Some(current)
 }
 
-fn update(app: &mut AppData) {
+
+fn update_listener(app: &mut AppData) {
     // input types
-    // #all -> all update to latest version
-    // #only-marked -> updates what is marked 'latest'
-    // #!only-marked -> updates what is not marked 'latest'
-    // #pls (plugin_name,plugin_name,plugin_name -> updates what is specified
+    // (implemented) #all -> all update to latest version
+    // (implemented) #!pre -> update to latest "stable" release
+    // (no used) #only-marked -> updates what is marked 'latest'
+    // (no used) #!only-marked -> updates what is not marked 'latest'
+    // #pls (plugin_name,plugin_name,plugin_name) -> updates what is specified
     // #~(RFC3339 formatted date) -> updates what is published before specified date
     // #(RFC3339 formatted date)~ -> updates what is published after specified date
     // #plv -> Enter select plugin and version mode.
@@ -370,68 +379,142 @@ fn update(app: &mut AppData) {
         match input.as_str() {
             "exit" | "E" | "e" => break,
             "#all" => {
-                all_update(app);
+                let all: Vec<String> = app.plugins.keys().map(|k: &String| String::from(k)).collect();
+                all_update(&all, app);
+            }
+            "#!pre" => {
+                let without_pre: Option<Vec<String>> = get_not_prerelease_plugins_name(&app);
+                if without_pre.is_none() {
+                    println!("{}", "mngr does not have any plugins that are marked as 'pre-release'.".green());
+                    continue
+                }
+                all_update(&without_pre.unwrap(), app);
             },
+            "#multi" => {
+                multiple_plugins_update_listener(app);
+            }
             _ => (),
         }
     }
 }
 
+fn get_not_prerelease_plugins_name(app: &AppData) -> Option<Vec<String>> {
+    if app.plugins.is_empty() { return None };
+    let mut result:  Vec<String> = Vec::new();
+    for pl in app.plugins.values() {
+        if !pl.pre_release { result.push(String::from(&pl.name)); }
+    }
+    Some(result)
+}
 
-fn all_update(app: &mut AppData) {
-    let mut new: HashMap<String, PluginData> = HashMap::new();
-    for plugin in &app.plugins {
-        // repository url (e.g.)-> https://github.com/Sakaki-Aruka/custom-crafter
-        let name: String = String::from(plugin.0);
-        let parsed_repository_url: Vec<String> = String::from(&plugin.1.repository_url).split("/").map(|c| String::from(c)).collect();
-        // 0 -> https:, 1 -> '', 2 -> github.com, 3 -> Sakaki-Aruka, 4 -> custom-crafter
-        let url: String = String::from(format!("https://api.github.com/repos/{}/{}/releases", &parsed_repository_url[3], &parsed_repository_url[4]));
-        let mut builder: RequestBuilder = blocking::Client::new().get(&url);
-        if !&app.github_token.is_empty() {
-            builder = builder.header("Authorization", format!("token {}", &app.github_token));
+fn multiple_plugins_update_listener(app: &mut AppData) {
+    let mut candidate: Vec<String> = Vec::new();
+    loop {
+        print!("mngr > update > multi > ");
+        stdout().flush().unwrap();
+        let mut input: String = String::new();
+        stdin().read_line(&mut input).ok();
+        let input: String = input.trim_end().to_string();
+        if input.is_empty() {
+            println!("{}", "Enter plugins name those separated with ','.".yellow());
+            continue
         }
-        builder = builder.header("X-GitHub-Api-Version", "2022-11-28");
-        builder = builder.header("User-Agent", "mngr");
-        builder = builder.header("Accept", "application/vnd.github.v3+json");
-        builder = builder.header("Content-Type", "application/json");
+        for p in input.split(",").map(|c| String::from(c)) {
+            candidate.push(p.replace(" ", ""));
+        }
+        break
+    }
+
+    let mut remove_candidate: Vec<String> = Vec::new();
+    for plugin in app.plugins.values() {
+        if !candidate.contains(&plugin.name) { continue };
+        let builder: RequestBuilder = get_releases_request_builder(&plugin, app);
         let response: reqwest::Result<Response> = builder.send();
         if response.is_err() {
             println!("{}", "Failed to get plugin data from GitHub API.".red());
             continue
         }
         let response: Response = response.unwrap();
-        let func: fn(&HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>> = |map: &HashMap<DateTime<Utc>, PluginData>| {
-            map.keys().cloned().max()
-        };
-        let parsed: Option<(String, PluginData)> = response_parser(response, Some(func));
-        if parsed.is_none() {
-            println!("{} ({})", "Failed to parse the response data from GitHub API.".red(), &plugin.0.yellow().underline());
+        let mut plugins: HashMap<DateTime<Utc>, PluginData> = response_parser(response);
+        remove_pre_release(&mut plugins);
+        remove_candidate.push(String::from(&plugin.name));
+    }
+    if !remove_candidate.is_empty() {
+        all_update(&remove_candidate, app);
+    }
+}
+
+fn remove_pre_release(data: &mut HashMap<DateTime<Utc>, PluginData>) {
+    let mut remove_candidate: Vec<DateTime<Utc>> = Vec::new();
+    for content in data.iter().clone() {
+        if content.1.pre_release { remove_candidate.push(content.0.clone()); }
+    }
+    if remove_candidate.is_empty() { return };
+    for key in remove_candidate {
+        data.remove(&key);
+    }
+}
+
+fn get_latest_plugin(data: &mut HashMap<DateTime<Utc>, PluginData>) -> Option<PluginData> {
+    if data.is_empty() { return None };
+    let latest_date: &DateTime<Utc> = &data.keys().copied().max().unwrap();
+    data.remove(latest_date)
+}
+
+fn get_releases_request_builder(pl: &PluginData, app: &AppData) -> RequestBuilder {
+    let url_parsed: Vec<String> = String::from(&pl.repository_url).split("/").map(|c| String::from(c)).collect();
+    let request_url: String = String::from(format!("https://api.github.com/repos/{}/{}/releases", &url_parsed[3], &url_parsed[4]));
+    let mut builder: RequestBuilder = blocking::Client::new().get(&request_url);
+    if !&app.github_token.is_empty() { builder = builder.header("Authorization", format!("token {}", &app.github_token)); };
+    builder = builder.header("X-GitHub-Api-Version", "2022-11-28");
+    builder = builder.header("User-Agent", "mngr");
+    builder = builder.header("Accept", "application/vnd.github.v3+json");
+    builder
+}
+fn all_update(data: &Vec<String>, app: &mut AppData) {
+    let mut new: Vec<PluginData> = Vec::new();
+    for name in data {
+        let pl: &PluginData = app.plugins.get(name).unwrap();
+        println!("\nUpdate Target = {}", &pl.name.underline());
+        let builder: RequestBuilder = get_releases_request_builder(pl, app);
+        let response: reqwest::Result<Response> = builder.send();
+        if response.is_err() {
+            println!("{}", "Failed to get plugin data from GitHub API.".red());
             continue
         }
-        let parsed: (String, PluginData) = parsed.unwrap();
-        new.insert(parsed.0, parsed.1);
+        let response: Response = response.unwrap();
+        let mut plugins: HashMap<DateTime<Utc>, PluginData> = response_parser(response);
+        remove_pre_release(&mut plugins);
+        if plugins.is_empty() {
+            println!("{} '{}'", "No releases in".red(), &pl.name.underline());
+            continue
+        }
+        let plugin: PluginData = get_latest_plugin(&mut plugins).unwrap();
+        if pl.version == plugin.version {
+            println!("{}", "The latest version is same with existed.".green());
+            println!("{}", "So mngr skips to update.".green());
+            continue
+        }
+        if !delete_plugin_jar(&pl.file_name, false) {
+            println!("{}", "Failed to remove the plugin file.".red());
+            println!("{} {}\n", "Continued to update".green(), &pl.name.underline());
+        }
+        if !jar_download(&plugin) {
+            println!("{}", "Failed to download the plugin jar file.".red());
+            continue
+        }
+        new.push(plugin);
     }
 
-    for remove in new {
-        let new_version: String = String::from(&remove.1.version);
-        let removed: PluginData = app.plugins.remove(&remove.0).unwrap();
-        app.plugins.insert(remove.0, remove.1);
-        println!("Old version: {} -> New version: {}", &removed.version.underline(), &new_version.underline());
-    }
-
-    for plugin in &app.plugins {
-        let plugins_path: Option<PathBuf> = get_plugins_directory_path();
-        if plugins_path.is_none() { continue };
-        let plugins_path: PathBuf = plugins_path.unwrap();
-        jar_download(plugin.1, &plugins_path);
+    if new.is_empty() { return };
+    for plugin in new {
+        app.plugins.remove(&plugin.name);
+        app.plugins.insert(String::from(&plugin.name), plugin);
     }
 }
 
-fn plugin_version_update_mode(app: &AppData) {
-    //
-}
 
-fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
+fn jar_download(plugin: &PluginData) -> bool {
     // https://github.com/Sakaki-Aruka/custom-crafter/releases/tag/v4.1.6
     // https://github.com/Sakaki-Aruka/custom-crafter/releases/download/v4.1.6/custom-crafter-4.1.6.jar
     // -> (repository-url)/releases/download/(version)/(file name)
@@ -446,7 +529,12 @@ fn jar_download(plugin: &PluginData, directory: &PathBuf) -> bool {
     let response: Response = response.unwrap();
 
     let filename: String = String::from(&plugin.file_name);
-    let mut path: PathBuf = PathBuf::from(directory);
+    let path: Option<PathBuf> = get_plugins_directory_path();
+    if path.is_none() {
+        println!("{}", "Failed to handle 'plugins' directory's path.".red());
+        return false;
+    }
+    let mut path: PathBuf = path.unwrap();
     path.push(filename);
     if path.exists() {
         println!("{}", "The file has already exists. What do you want to do to it?".yellow());
@@ -499,19 +587,19 @@ fn get_rate_limit_remaining(response: &Response) -> Option<i16> {
 }
 
 
-fn response_parser (response: Response, sorter: Option<fn(&HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>>>) -> Option<(String, PluginData)> {
+fn response_parser (response: Response) -> HashMap<DateTime<Utc>, PluginData> {
     // json parser -> https://docs.rs/serde_json/latest/serde_json/
     let response_str: reqwest::Result<String> = response.text();
     if response_str.is_err() {
         println!("{}", "Failed to receive an API response.".red());
-        return None
+        return HashMap::new()
     };
     // hashmap -> key: plugin name, value: PluginData
     let response_str: String = response_str.unwrap();
     let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(response_str.as_str());
     if parsed.is_err() {
         println!("{}", "Mapping failed to PluginData from the response data.".red());
-        return None
+        return HashMap::new()
     }
 
     let parsed: Value = parsed.unwrap();
@@ -541,20 +629,7 @@ fn response_parser (response: Response, sorter: Option<fn(&HashMap<DateTime<Utc>
             unsorted_data.insert(key, plugin);
         }
     }
-
-    let latest_date: Option<DateTime<Utc>> = if sorter.is_none() {
-        get_latest_date(&unsorted_data)
-    } else {
-        let func = sorter.unwrap();
-        func(&unsorted_data)
-    };
-    if latest_date.is_none() {
-        println!("{}", "Failed to search latest release.".red());
-        return None
-    }
-    let latest_date: DateTime<Utc> = latest_date.unwrap();
-    let plugin: PluginData = unsorted_data.remove(&latest_date).unwrap();
-    Some((String::from(&plugin.name), plugin))
+    unsorted_data
 }
 
 fn get_latest_date(map: &HashMap<DateTime<Utc>, PluginData>) -> Option<DateTime<Utc>> {
