@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
 use std::arch::x86_64::_mm_add_pd;
+use std::fmt::format;
 use std::fs::{File};
 use std::io::{Result, stdin, stdout, Write};
 use std::ops::DerefMut;
@@ -128,6 +129,7 @@ fn main() {
             "unregister" | "UR" | "ur" => unregister_listener(&mut app),
             "list" | "L" | "l" => print_plugins(&app),
             "update" | "U" | "u" => update_listener(&mut app),
+            "remaining" | "rate" => rate_limit_command(&app),
             _ => {
                 println!("{}", "Enter 'help' or 'H', displayed command helps.".underline());
             },
@@ -586,6 +588,35 @@ fn get_rate_limit_remaining(response: &Response) -> Option<i16> {
     }
 }
 
+fn rate_limit_command(app: &AppData) {
+    let url: String = String::from("https://api.github.com/meta");
+    let mut builder: RequestBuilder  = blocking::Client::new().get(&url);
+    if !app.github_token.is_empty() { builder = builder.header("Authorization", format!("token {}", &app.github_token)); }
+    builder = builder.header("X-GitHub-Api-Version", "2022-11-28");
+    builder = builder.header("User-Agent", "mngr");
+    builder = builder.header("Accept", "application/vnd.github.v3+json");
+    let response: reqwest::Result<Response> = builder.send();
+    if response.is_err() {
+        println!("{}", "Failed to get API rate limit remaining.".red());
+        return
+    }
+    let response: Response = response.unwrap();
+    let result: Option<i16> = get_rate_limit_remaining(&response);
+    if result.is_none() {
+        println!("{}", "Failed to get API rate limit remaining.".red());
+        return
+    }
+    println!("API rate limit remaining = {}", result.unwrap());
+    let unix_time_key: HeaderName = HeaderName::from_str("X-RateLimit-Reset").unwrap();
+    let result: Option<&HeaderValue> = (&response).headers().get(unix_time_key);
+    if result.is_none() {
+        return
+    }
+    let result: i64 = result.unwrap().to_str().unwrap().parse::<i64>().unwrap();
+    let reset_date: DateTime<Utc> = DateTime::from_timestamp(result, 0).unwrap();
+    println!("The time when the API rate limit is lifted. (UTC) = {}", reset_date.to_utc().to_string());
+}
+
 
 fn response_parser (response: Response) -> HashMap<DateTime<Utc>, PluginData> {
     // json parser -> https://docs.rs/serde_json/latest/serde_json/
@@ -654,7 +685,7 @@ fn show_help() {
     println!("'{}' or '{}' - {}", "sync".green(), "S".green(), "sync with the plugins directory status.");
     println!("'{}' or '{}' - {}", "register".green(), "R".green(), "Enter 'register' mode.");
     println!("'{}' or '{}' - {}", "unregister".green(), "UR".green(), "Enter 'unregister' mode.");
-    println!("'{}' or '{}' - {}", "update (plugin_name or 'all')".green(), "U (plugin_name or 'all')".green(), "update a specified or all plugins.");
+    println!("'{}' or '{}' - {}", "update".green(), "U".green(), "Enter 'update' mode.");
     println!("'{}' or '{}' - {}", "list".green(), "L".green(), "displays all plugins info.");
     println!("'{}' - {}", "remaining".green(), "displays remaining GitHub API request.");
 }
