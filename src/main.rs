@@ -1,13 +1,10 @@
 use std::collections::HashMap;
 use std::path::{PathBuf};
 use std::{env, fs};
-use std::arch::x86_64::_mm_add_pd;
-use std::fmt::format;
 use std::fs::{File};
 use std::io::{Result, stdin, stdout, Write};
-use std::ops::DerefMut;
-use std::str::{Bytes, FromStr};
-use chrono::{DateTime, FixedOffset, ParseResult, TimeDelta, Utc};
+use std::str::{FromStr};
+use chrono::{DateTime, FixedOffset, ParseResult, Utc};
 use colored::{ColoredString, Colorize};
 use http::{HeaderName, HeaderValue};
 use fancy_regex::Regex;
