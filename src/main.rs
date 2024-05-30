@@ -494,11 +494,6 @@ fn all_update(data: &Vec<String>, app: &mut AppData) {
             continue
         }
         let plugin: PluginData = get_latest_plugin(&mut plugins).unwrap();
-        if pl.version == plugin.version {
-            println!("{}", "The latest version is same with existed.".green());
-            println!("{}", "So mngr skips to update.".green());
-            continue
-        }
         if !delete_plugin_jar(&pl.file_name, false) {
             println!("{}", "Failed to remove the plugin file.".red());
             println!("{} {}\n", "Continued to update".green(), &pl.name.underline());
